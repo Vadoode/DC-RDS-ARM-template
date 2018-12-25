@@ -1,0 +1,781 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.1",
+  "parameters": {
+    "clientShortName": {
+      "type": "string"
+    },
+    "clientSitePublicIP": {
+      "defaultValue": "139.130.0.10",
+      "type": "string"
+    },
+    "clientSiteName": {
+      "defaultValue": "melbourne",
+      "type": "string"
+    },
+    "localNetworkAddressRange": {
+      "defaultValue": "172.17.0.0/22",
+      "type": "string"
+    }
+  },
+  "variables": {
+    "rgLocation": "[resourceGroup().location]",
+    "azureInfraNetwork": "10.10.0.0/23",
+    "ServersSubnet": "10.10.0.0/24",
+    "GatewaySubnet": "10.10.1.0/24",
+    "P2SSubnet": "10.10.2.0/24",
+    "DCIPAddr": "10.10.0.4",
+    "RDS1IPAddr": "10.10.0.11",
+    "RDS2IPAddr": "10.10.0.12",
+    "adminUserName": "itsadmin",
+    "adminPassword": "[concat('It$Cp5wd=', parameters('clientShortName'))]",
+    "DCVMSize": "Standard_B1s",
+    "RDSVMSize": "Standard_B1s",
+    "STSPublicIP": "[concat(parameters('clientShortName'), '-sts-azure-ip')]",
+    "STSConnectionName": "[concat(parameters('clientShortName'), '-AZ-STS-Connection')]",
+    "STSSharedKey": "[uniqueString(resourceGroup().id, parameters('clientSitePublicIP'))]"
+  },
+  "resources": [
+    {
+      "comments": "~Create the virtual network.",
+      "type": "Microsoft.Network/virtualNetworks",
+      "name": "[concat(parameters('clientShortName'), '-az-network')]",
+      "apiVersion": "2018-08-01",
+      "location": "[variables('rgLocation')]",
+      "scale": null,
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('azureInfraNetwork')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "ServersSubnet",
+            "properties": {
+              "addressPrefix": "[variables('ServersSubnet')]"
+            }
+          },
+          {
+            "name": "GatewaySubnet",
+            "properties": {
+              "addressPrefix": "[variables('GatewaySubnet')]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "comments": "~Domain Controller VM",
+      "type": "Microsoft.Compute/virtualMachines",
+      "name": "[concat(parameters('clientShortName'), '-az-dc')]",
+      "apiVersion": "2018-06-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[variables('DCVMSize')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "MicrosoftWindowsServer",
+            "offer": "WindowsServer",
+            "sku": "2016-Datacenter-smalldisk",
+            "version": "latest"
+          },
+          "osDisk": {
+            "osType": "Windows",
+            "name": "[concat('dc_osdisk_' ,uniqueString(parameters('clientShortName')) )]",
+            "createOption": "FromImage",
+            "caching": "ReadWrite",
+            "managedDisk": {
+              "storageAccountType": "Standard_LRS"
+            }
+          },
+          "dataDisks": []
+        },
+        "osProfile": {
+          "computerName": "[concat(parameters('clientShortName'), '-az-dc')]",
+          "adminUsername": "[variables('adminUserName')]",
+          "adminPassword": "[variables('adminPassword')]",
+          "windowsConfiguration": {
+            "provisionVMAgent": true,
+            "enableAutomaticUpdates": true,
+            "timeZone": "AUS Eastern Standard Time"
+          },
+          "allowExtensionOperations": true
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', 'dc-network-interface')]"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', 'dc-network-interface')]"
+      ]
+    },
+    {
+      "comments": "~RDS 1 (main) VM",
+      "type": "Microsoft.Compute/virtualMachines",
+      "name": "[concat(parameters('clientShortName'), '-az-rds1')]",
+      "apiVersion": "2018-06-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "availabilitySet": {
+          "id": "[resourceId('Microsoft.Compute/availabilitySets','RDSAvailabilitySet')]"
+        },
+        "hardwareProfile": {
+          "vmSize": "[variables('RDSVMSize')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "MicrosoftWindowsServer",
+            "offer": "WindowsServer",
+            "sku": "2016-Datacenter-smalldisk",
+            "version": "latest"
+          },
+          "osDisk": {
+            "osType": "Windows",
+            "name": "[concat('rds1_osdisk_' ,uniqueString(parameters('clientShortName')) )]",
+            "createOption": "FromImage",
+            "caching": "ReadWrite",
+            "managedDisk": {
+              "storageAccountType": "Standard_LRS"
+            }
+          },
+          "dataDisks": []
+        },
+        "osProfile": {
+          "computerName": "[concat(parameters('clientShortName'), '-az-rds1')]",
+          "adminUsername": "[variables('adminUserName')]",
+          "adminPassword": "[variables('adminPassword')]",
+          "windowsConfiguration": {
+            "provisionVMAgent": true,
+            "enableAutomaticUpdates": true,
+            "timeZone": "AUS Eastern Standard Time"
+          },
+          "allowExtensionOperations": true
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', 'rds1-network-interface')]"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', 'rds1-network-interface')]",
+        "[resourceId('Microsoft.Compute/availabilitySets','RDSAvailabilitySet')]"
+      ]
+    },
+    {
+      "comments": "~RDS 2 VM",
+      "type": "Microsoft.Compute/virtualMachines",
+      "name": "[concat(parameters('clientShortName'), '-az-rds2')]",
+      "apiVersion": "2018-06-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "availabilitySet": {
+          "id": "[resourceId('Microsoft.Compute/availabilitySets','RDSAvailabilitySet')]"
+        },
+        "hardwareProfile": {
+          "vmSize": "[variables('RDSVMSize')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "MicrosoftWindowsServer",
+            "offer": "WindowsServer",
+            "sku": "2016-Datacenter-smalldisk",
+            "version": "latest"
+          },
+          "osDisk": {
+            "osType": "Windows",
+            "name": "[concat('rds2_osdisk_' ,uniqueString(parameters('clientShortName')) )]",
+            "createOption": "FromImage",
+            "caching": "ReadWrite",
+            "managedDisk": {
+              "storageAccountType": "Standard_LRS"
+            }
+          },
+          "dataDisks": []
+        },
+        "osProfile": {
+          "computerName": "[concat(parameters('clientShortName'), '-az-rds2')]",
+          "adminUsername": "[variables('adminUserName')]",
+          "adminPassword": "[variables('adminPassword')]",
+          "windowsConfiguration": {
+            "provisionVMAgent": true,
+            "enableAutomaticUpdates": true,
+            "timeZone": "AUS Eastern Standard Time"
+          },
+          "allowExtensionOperations": true
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', 'rds2-network-interface')]"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', 'rds2-network-interface')]",
+        "[resourceId('Microsoft.Compute/availabilitySets','RDSAvailabilitySet')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "name": "[concat(concat(parameters('clientShortName'), '-az-dc'), '/', 'extensions_dsc')]",
+      "comments": "desired state configuration setting for this server",
+      "apiVersion": "2015-06-15",
+      "location": "[variables('rgLocation')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', concat(parameters('clientShortName'), '-az-dc'))]"
+      ],
+      "properties": {
+        "publisher": "Microsoft.Powershell",
+        "type": "DSC",
+        "typeHandlerVersion": "2.73",
+        "autoUpgradeMinorVersion": true,
+        "settings": {
+          "wmfVersion": "latest",
+          "configuration": {
+            "url": "https://github.com/Vadoode/myPowerShell/blob/to-include-rds/itsdsc.zip?raw=true",
+            "script": "itsdsc.ps1",
+            "function": "ITSwitchDC"
+          },
+          "configurationArguments": {
+            "CountryName": "Hobart",
+            "PsgrName": "Abbas"
+          },
+          "privacy": {
+            "dataCollection": "Disable"
+          }
+        },
+        "protectedSettings": {
+          "configurationArguments": {}
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "name": "[concat(concat(parameters('clientShortName'), '-az-rds1'), '/', 'extensions_rds1_dsc')]",
+      "comments": "desired state configuration setting for this server",
+      "apiVersion": "2015-06-15",
+      "location": "[variables('rgLocation')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', concat(parameters('clientShortName'), '-az-rds1'))]"
+      ],
+      "properties": {
+        "publisher": "Microsoft.Powershell",
+        "type": "DSC",
+        "typeHandlerVersion": "2.73",
+        "autoUpgradeMinorVersion": true,
+        "settings": {
+          "wmfVersion": "latest",
+          "configuration": {
+            "url": "https://github.com/Vadoode/myPowerShell/blob/to-include-rds/itsdsc.zip?raw=true",
+            "script": "itsdsc.ps1",
+            "function": "ITSwitchRDS"
+          },
+          "privacy": {
+            "dataCollection": "Disable"
+          }
+        },
+        "protectedSettings": {
+          "configurationArguments": {}
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "name": "[concat(concat(parameters('clientShortName'), '-az-rds2'), '/', 'extensions_rds2_dsc')]",
+      "comments": "desired state configuration setting for this server.",
+      "apiVersion": "2015-06-15",
+      "location": "[variables('rgLocation')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', concat(parameters('clientShortName'), '-az-rds2'))]"
+      ],
+      "properties": {
+        "publisher": "Microsoft.Powershell",
+        "type": "DSC",
+        "typeHandlerVersion": "2.73",
+        "autoUpgradeMinorVersion": true,
+        "settings": {
+          "wmfVersion": "latest",
+          "configuration": {
+            "url": "https://github.com/Vadoode/myPowerShell/blob/to-include-rds/itsdsc.zip?raw=true",
+            "script": "itsdsc.ps1",
+            "function": "ITSwitchRDS"
+          },
+          "privacy": {
+            "dataCollection": "Disable"
+          }
+        },
+        "protectedSettings": {
+          "configurationArguments": {}
+        }
+      }
+    },
+    {
+      "comments": "~RDS availability set.",
+      "name": "RDSAvailabilitySet",
+      "type": "Microsoft.Compute/availabilitySets",
+      "apiVersion": "2018-10-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "platformUpdateDomainCount": 2,
+        "platformFaultDomainCount": 2
+      },
+      "sku": {
+        "name": "aligned"
+      }
+    },
+    {
+      "comments": "~Site to site connection between Azure and Client.",
+      "type": "Microsoft.Network/connections",
+      "name": "[variables('STSConnectionName')]",
+      "apiVersion": "2018-08-01",
+      "location": "[variables('rgLocation')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworkGateways', concat(parameters('clientSiteName'), '-STS-Azure-Side-GW'))]",
+        "[resourceId('Microsoft.Network/localNetworkGateways',concat('localgw-',parameters('clientSiteName')))]"
+      ],
+      "properties": {
+        "sharedKey": "[variables('STSSharedKey')]",
+        "virtualNetworkGateway1": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworkGateways', concat(parameters('clientSiteName'), '-STS-Azure-Side-GW'))]",
+          "location": "[variables('rgLocation')]",
+          "properties": {}
+        },
+        "localNetworkGateway2": {
+          "id": "[resourceId('Microsoft.Network/localNetworkGateways',concat('localgw-',parameters('clientSiteName')))]",
+          "location": "[variables('rgLocation')]",
+          "properties": {}
+        },
+        "connectionType": "IPsec",
+        "connectionProtocol": "IKEv2"
+      }
+    },
+    {
+      "comments": "~~Temp Site to site connection between Azure and Geelong.",
+      "type": "Microsoft.Network/connections",
+      "name": "geelong-AZ-STS-Connection",
+      "apiVersion": "2018-08-01",
+      "location": "[variables('rgLocation')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworkGateways', concat(parameters('clientSiteName'), '-STS-Azure-Side-GW'))]",
+        "[resourceId('Microsoft.Network/localNetworkGateways','localgw-geelong')]"
+      ],
+      "properties": {
+        "sharedKey": "[variables('STSSharedKey')]",
+        "virtualNetworkGateway1": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworkGateways', concat(parameters('clientSiteName'), '-STS-Azure-Side-GW'))]",
+          "location": "[variables('rgLocation')]",
+          "properties": {}
+        },
+        "localNetworkGateway2": {
+          "id": "[resourceId('Microsoft.Network/localNetworkGateways','localgw-geelong')]",
+          "location": "[variables('rgLocation')]",
+          "properties": {}
+        },
+        "connectionType": "IPsec",
+        "connectionProtocol": "IKEv2"
+      }
+    },
+    {
+      "comments": "~Local Network Gateways for Client side of STS VPN.",
+      "type": "Microsoft.Network/localNetworkGateways",
+      "name": "[concat('localgw-',parameters('clientSiteName'))]",
+      "apiVersion": "2018-08-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "localNetworkAddressSpace": {
+          "addressPrefixes": [
+            "[parameters('localNetworkAddressRange')]"
+          ]
+        },
+        "gatewayIpAddress": "[parameters('clientSitePublicIP')]"
+      }
+    },
+    {
+      "comments": "~~TEMP Local Network Gateways for Client side of STS VPN Geelong.",
+      "type": "Microsoft.Network/localNetworkGateways",
+      "name": "localgw-geelong",
+      "apiVersion": "2018-08-01",
+      "location": "[variables('rgLocation')]",
+      "scale": null,
+      "properties": {
+        "localNetworkAddressSpace": {
+          "addressPrefixes": [
+            "172.17.4.0/22"
+          ]
+        },
+        "gatewayIpAddress": "203.87.62.2"
+      }
+    },
+    {
+      "comments": "~Network Interface for DC.",
+      "type": "Microsoft.Network/networkInterfaces",
+      "name": "dc-network-interface",
+      "apiVersion": "2018-08-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAddress": "[variables('DCIPAddr')]",
+              "privateIPAllocationMethod": "Static",
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', 'dc-public-ip')]"
+              },
+              "subnet": {
+                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(parameters('clientShortName'), '-az-network'), 'ServersSubnet')]"
+              },
+              "primary": true,
+              "privateIPAddressVersion": "IPv4"
+            }
+          }
+        ],
+        "dnsSettings": {
+          "dnsServers": [
+            "127.0.0.1",
+            "8.8.8.8"
+          ]
+        },
+        "enableAcceleratedNetworking": false,
+        "enableIPForwarding": false,
+        "networkSecurityGroup": {
+          "id": "[resourceId('Microsoft.Network/networkSecurityGroups', 'servers-nsg')]"
+        },
+        "primary": true
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', 'dc-public-ip')]",
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(parameters('clientShortName'), '-az-network'), '')]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', 'servers-nsg')]"
+      ]
+    },
+    {
+      "comments": "~Network Interface for RDS1.",
+      "type": "Microsoft.Network/networkInterfaces",
+      "name": "rds1-network-interface",
+      "apiVersion": "2018-08-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAddress": "[variables('RDS1IPAddr')]",
+              "privateIPAllocationMethod": "Static",
+              "subnet": {
+                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(parameters('clientShortName'), '-az-network'), 'ServersSubnet')]"
+              },
+              "primary": true,
+              "privateIPAddressVersion": "IPv4"
+            }
+          }
+        ],
+        "dnsSettings": {
+          "dnsServers": [
+            "[variables('DCIPAddr')]"
+          ]
+        },
+        "enableAcceleratedNetworking": false,
+        "enableIPForwarding": false,
+        "networkSecurityGroup": {
+          "id": "[resourceId('Microsoft.Network/networkSecurityGroups', 'servers-nsg')]"
+        },
+        "primary": true
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(parameters('clientShortName'), '-az-network'), '')]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', 'servers-nsg')]"
+      ]
+    },
+    {
+      "comments": "~Network Interface for RDS2.",
+      "type": "Microsoft.Network/networkInterfaces",
+      "name": "rds2-network-interface",
+      "apiVersion": "2018-08-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAddress": "[variables('RDS2IPAddr')]",
+              "privateIPAllocationMethod": "Static",
+              "subnet": {
+                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(parameters('clientShortName'), '-az-network'), 'ServersSubnet')]"
+              },
+              "primary": true,
+              "privateIPAddressVersion": "IPv4"
+            }
+          }
+        ],
+        "dnsSettings": {
+          "dnsServers": [
+            "[variables('DCIPAddr')]"
+          ]
+        },
+        "enableAcceleratedNetworking": false,
+        "enableIPForwarding": false,
+        "networkSecurityGroup": {
+          "id": "[resourceId('Microsoft.Network/networkSecurityGroups', 'servers-nsg')]"
+        },
+        "primary": true
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(parameters('clientShortName'), '-az-network'), '')]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', 'servers-nsg')]"
+      ]
+    },
+    {
+      "comments": "Network Sec Group for Servers.",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "servers-nsg",
+      "apiVersion": "2018-08-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "AllowRDPFromInternet",
+            "properties": {
+              "protocol": "TCP",
+              "sourcePortRange": "*",
+              "destinationPortRange": "3389",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound",
+              "sourcePortRanges": [],
+              "destinationPortRanges": [],
+              "sourceAddressPrefixes": [],
+              "destinationAddressPrefixes": []
+            }
+          },
+          {
+            "name": "AllowLocalLANInBound",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "[parameters('localNetworkAddressRange')]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 110,
+              "direction": "Inbound",
+              "sourcePortRanges": [],
+              "destinationPortRanges": [],
+              "sourceAddressPrefixes": [],
+              "destinationAddressPrefixes": []
+            }
+          },
+          {
+            "name": "AllowLocalLANOutBound",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "[parameters('localNetworkAddressRange')]",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Outbound",
+              "sourcePortRanges": [],
+              "destinationPortRanges": [],
+              "sourceAddressPrefixes": [],
+              "destinationAddressPrefixes": []
+            }
+          }
+        ],
+        "defaultSecurityRules": []
+      }
+    },
+    {
+      "comments": "Public IP for domain controller.",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "sku": {
+        "name": "Basic",
+        "tier": "Regional"
+      },
+      "name": "dc-public-ip",
+      "apiVersion": "2018-08-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "publicIPAllocationMethod": "Dynamic",
+        "idleTimeoutInMinutes": 4,
+        "ipTags": []
+      }
+    },
+    {
+      "comments": "Public IP for Virtual Network Gateway (STS Azure Side).",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "sku": {
+        "name": "Basic",
+        "tier": "Regional"
+      },
+      "name": "[variables('STSPublicIP')]",
+      "apiVersion": "2018-08-01",
+      "location": "[variables('rgLocation')]",
+      "scale": null,
+      "properties": {
+        "publicIPAddressVersion": "IPv4",
+        "publicIPAllocationMethod": "Dynamic",
+        "idleTimeoutInMinutes": 4,
+        "ipTags": []
+      }
+    },
+    {
+      "comments": "~Virtual network gateway for Azure side of STS.",
+      "type": "Microsoft.Network/virtualNetworkGateways",
+      "name": "[concat(parameters('clientSiteName'), '-STS-Azure-Side-GW')]",
+      "apiVersion": "2018-08-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "default",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('STSPublicIP'))]"
+              },
+              "subnet": {
+                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(parameters('clientShortName'), '-az-network'), 'GatewaySubnet')]"
+              }
+            }
+          }
+        ],
+        "sku": {
+          "name": "Basic",
+          "tier": "Basic",
+          "capacity": 2
+        },
+        "vpnClientConfiguration": {
+          "vpnClientAddressPool": {
+            "addressPrefixes": [
+              "[variables('P2SSubnet')]"
+            ]
+          },
+          "vpnClientRootCertificates": [
+            {
+              "properties": {
+                "publicCertData": "MIIC5zCCAc+gAwIBAgIQQAGCRSy+ua1P+qDjezo67TANBgkqhkiG9w0BAQsFADAWMRQwEgYDVQQDDAtQMlNSb290Q2VydDAeFw0xODEyMjUwMDQ5NTZaFw0xOTEyMjUwMTA5NTZaMBYxFDASBgNVBAMMC1AyU1Jvb3RDZXJ0MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqnUld2C6ZfzSGel9+qaclRhZipboT7aQnvWUAMwgRzCV/xZC8SxCaSMyBRgynO04nkkJ8M5VIk4OYIcrR+03rYtxazDbooF25FEGkyp0WxqJtkMD0/kaSpNehAntqW3xK1fy+8Q4BuE2KhVFl80E68VIQjxo/WzMj94YKuSGfAfy5jnCkkAFiMBZa15AlxjjlUafYg7nLlgiA0VcGN8QKeLsDE4MIF+skZW7/+Msh15sTrvY9dCaJD07DQFHYTb+SoC3EoFeONiNLBYvi+9afTOuVTbrKOaNh7XtOpAXh5fVjpsnMdHyy3MIYyaeMVidAZNXOjwC4c4JFz3+e2bV9QIDAQABozEwLzAOBgNVHQ8BAf8EBAMCAgQwHQYDVR0OBBYEFCROvLjTh8HYBoBKZE4BQltf4TXOMA0GCSqGSIb3DQEBCwUAA4IBAQCk/7VIQFjFOIqy52/TRGr7WjWAdQmCOnjjNaQN1KiIQp5qoO1Qo7kCpMIX0mzkg2wGEruYc6WOEtMiBHoaB3h5x4kMx9jj8JgAwTI4RPCGIwZv2JP2C4g2Ahd6iKOeZzKvpcNRqeBrTwiCiIu3j64qrna4Kzf87fxV1yjJAUT9igx9UXVfRCjkHLRn3qgEjsOXr/aTukjvrolRPBmNOgVjgkOsuDJJVq1NTbO9YhSq4VIO4PnWyoUz8L6zWXfIVRIjy/O1LC49L09yzk0wk+G6oulwjUwZFmHnkik7nV9vCOkn2dDkmxMw8vJ6PkvJQvRWjYP60nC0g1OsoVcIMovP"
+              },
+              "name": "certp2sroot"
+            }
+          ]
+        },
+        "gatewayType": "Vpn",
+        "vpnType": "RouteBased",
+        "enableBgp": false,
+        "activeActive": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses',variables('STSPublicIP'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(parameters('clientShortName'), '-az-network'), 'GatewaySubnet')]"
+      ]
+    },
+    {
+      "comments": "~Enable VM Access DC'.",
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "name": "[concat(concat(parameters('clientShortName'), '-az-dc'), '/', 'extensions_enablevmaccess')]",
+      "apiVersion": "2018-06-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "autoUpgradeMinorVersion": true,
+        "settings": {},
+        "publisher": "Microsoft.Compute",
+        "type": "VMAccessAgent",
+        "typeHandlerVersion": "2.0",
+        "protectedSettings": {}
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', concat(parameters('clientShortName'), '-az-dc'))]"
+      ]
+    },
+    {
+      "comments": "~Enable VM Access RDS1'.",
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "name": "[concat(concat(parameters('clientShortName'), '-az-rds1'), '/', 'extensions_enablevmaccess')]",
+      "apiVersion": "2018-06-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "autoUpgradeMinorVersion": true,
+        "settings": {},
+        "publisher": "Microsoft.Compute",
+        "type": "VMAccessAgent",
+        "typeHandlerVersion": "2.0",
+        "protectedSettings": {}
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', concat(parameters('clientShortName'), '-az-rds1'))]"
+      ]
+    },
+    {
+      "comments": "~Enable VM Access RDS2'.",
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "name": "[concat(concat(parameters('clientShortName'), '-az-rds2'), '/', 'extensions_enablevmaccess')]",
+      "apiVersion": "2018-06-01",
+      "location": "[variables('rgLocation')]",
+      "properties": {
+        "autoUpgradeMinorVersion": true,
+        "settings": {},
+        "publisher": "Microsoft.Compute",
+        "type": "VMAccessAgent",
+        "typeHandlerVersion": "2.0",
+        "protectedSettings": {}
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', concat(parameters('clientShortName'), '-az-rds2'))]"
+      ]
+    },
+    {
+      "comments": "~Subnet for gateway.",
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "name": "[concat(concat(parameters('clientShortName'), '-az-network'),'/', 'GatewaySubnet')]",
+      "apiVersion": "2018-08-01",
+      "scale": null,
+      "properties": {
+        "addressPrefix": "[variables('GatewaySubnet')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', concat(parameters('clientShortName'), '-az-network'))]"
+      ]
+    },
+    {
+      "comments": "~Subnet for servers.",
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "name": "[concat(concat(parameters('clientShortName'), '-az-network'),'/', 'ServersSubnet')]",
+      "apiVersion": "2018-08-01",
+      "properties": {
+        "addressPrefix": "[variables('ServersSubnet')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', concat(parameters('clientShortName'), '-az-network'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "STS VPN Shared Key": {
+      "type": "string",
+      "value": "[variables('STSSharedKey')]"
+    },
+    "Admin Password (user: ITSAdmin)": {
+      "type": "string",
+      "value": "[variables('adminPassword')]"
+    },
+    "STS VPN Cnxn Object": {
+      "type": "string",
+      "value": "[reference(variables('STSPublicIP')).ipAddress]"
+    }
+  }
+}
