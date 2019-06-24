@@ -37,7 +37,7 @@
   },
   "resources": [
     {
-      "comments": "~Create the virtual network.",
+      "comments": "~Create the virtual network. {trying to change this}}",
       "type": "Microsoft.Network/virtualNetworks",
       "name": "[concat(parameters('clientShortName'), '-az-network')]",
       "apiVersion": "2018-08-01",
